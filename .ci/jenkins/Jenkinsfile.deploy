@@ -10,7 +10,7 @@ examplesHelper = null
 
 pipeline {
     agent {
-        label 'kie-rhel7 && kie-mem16g && !built-in'
+        label 'kie-rhel8-priority && !built-in'
     }
 
     tools {
@@ -57,15 +57,15 @@ pipeline {
                         assert getProjectVersion()
                         assert getDroolsVersion()
 
-                        if (isRelease()) {
+                        /*if (isRelease()) {
                             // Verify if on right release branch
                             assert getBuildBranch() == util.getReleaseBranchFromVersion(getProjectVersion())
-                        }
+                        }*/
                     }
-
+                    echo "GIT_BOT_CREDENTIALS_ID: ${getBotAuthorCredsID()}"
                     dir(getRepoName()) {
                         checkoutRepo()
-                    }
+                    }    
                 }
             }
             post {
@@ -86,11 +86,11 @@ pipeline {
                 expression { return isRelease() || isCreatePr() }
             }
             steps {
-                script{
+                script {
                     dir(getRepoName()) {
                         prepareForPR()
                     }
-                }
+                }        
             }
         }
         stage('Update project version') {
@@ -121,53 +121,9 @@ pipeline {
         stage('Build kogito-examples') {
             steps {
                 script {
-                    getMavenCommand().withProperty('maven.test.failure.ignore', true).skipTests(params.SKIP_TESTS).run('clean install')
-                }
-            }
-            post {
-                always {
-                    script {
-                        saveReports()
-                        util.archiveConsoleLog()
+                    dir(getRepoName()) {
+                        echo "getMavenCommand().withProperty('maven.test.failure.ignore', true).skipTests(params.SKIP_TESTS).run('clean install')"
                     }
-                }
-            }
-        }
-        stage('Check kogito-examples with persistence') {
-            when {
-                expression { return !isPersistenceDisabled() }
-            }
-            steps {
-                script {
-                    sh "cp -r ${getRepoName()} ${getRepoName()}-persistence"
-                    getMavenCommand("${getRepoName()}-persistence")
-                        .skipTests(params.SKIP_TESTS)
-                        .withProfiles(['persistence'])
-                        .withProperty('maven.test.failure.ignore', true)
-                        .run('clean install')
-                }
-            }
-            post {
-                always {
-                    script {
-                        saveReports()
-                        util.archiveConsoleLog()
-                    }
-                }
-            }
-        }
-        stage('Check kogito-examples with events') {
-            when {
-                expression { return !isEventsDisabled() }
-            }
-            steps {
-                script {
-                    sh "cp -r ${getRepoName()} ${getRepoName()}-events"
-                    getMavenCommand("${getRepoName()}-events")
-                        .skipTests(params.SKIP_TESTS)
-                        .withProfiles(['events'])
-                        .withProperty('maven.test.failure.ignore', true)
-                        .run('clean install')
                 }
             }
             post {
@@ -182,7 +138,9 @@ pipeline {
         stage('Deploy kogito-examples locally') {
             steps {
                 script {
-                    runMavenDeploy(true)
+                    dir(getRepoName()) {
+                        runMavenDeploy(true)
+                    }    
                 }
             }
         }
@@ -192,8 +150,10 @@ pipeline {
             }
             steps {
                 script {
-                    // Deploy to specific repository with credentials
-                    maven.uploadLocalArtifacts(env.MAVEN_REPO_CREDS_ID, getLocalDeploymentFolder(), getMavenRepoZipUrl())
+                    dir(getRepoName()) {
+                        // Deploy to specific repository with credentials
+                        echo "maven.uploadLocalArtifacts(${env.MAVEN_REPO_CREDS_ID}, ${getLocalDeploymentFolder()}, ${getMavenRepoZipUrl()})"
+                    }
                 }
             }
         }
@@ -203,8 +163,10 @@ pipeline {
             }
             steps {
                 script {
-                    // Stage release artifacts
-                    runMavenStage()
+                    dir(getRepoName()) {
+                        // Stage release artifacts
+                        echo "runMavenStage()"
+                    }    
                 }
             }
         }
@@ -213,38 +175,13 @@ pipeline {
                 expression { return isRelease() || isCreatePr() }
             }
             steps {
-                script {
-                    dir(getRepoName()) {
-                        if (githubscm.isThereAnyChanges()) {
-                            commitAndCreatePR()
-                        } else {
-                            println '[WARN] no changes to commit'
-                        }
-                    }
-                }
-            }
-            post {
-                success {
-                    script {
-                        setDeployPropertyIfNeeded("${getRepoName()}.pr.source.uri", "https://github.com/${getBotAuthor()}/${getRepoName()}")
-                        setDeployPropertyIfNeeded("${getRepoName()}.pr.source.ref", getBotBranch())
-                        setDeployPropertyIfNeeded("${getRepoName()}.pr.target.uri", "https://github.com/${getGitAuthor()}/${getRepoName()}")
-                        setDeployPropertyIfNeeded("${getRepoName()}.pr.target.ref", getBuildBranch())
-                    }
-                }
-            }
-        }
-        stage('Update nightly branch') {
-            when {
-                expression { return isUpdateNightlyBranch() && !isCreatePr() && !isRelease() }
-            }
-            steps {
-                script {
-                    String nightlyBranch = "nightly-${getBuildBranch()}"
-                    dir(getRepoName()) {
-                        githubscm.createBranch(nightlyBranch)
-                        githubscm.pushObject('origin', nightlyBranch, getGitAuthorCredsID())
-                    }
+                dir(getRepoName()) {
+                    commitAndCreatePR()
+
+                    setDeployPropertyIfNeeded("${getRepoName()}.pr.source.uri", "https://github.com/${getBotAuthor()}/${getRepoName()}")
+                    setDeployPropertyIfNeeded("${getRepoName()}.pr.source.ref", getBotBranch())
+                    setDeployPropertyIfNeeded("${getRepoName()}.pr.target.uri", "https://github.com/${getGitAuthor()}/${getRepoName()}")
+                    setDeployPropertyIfNeeded("${getRepoName()}.pr.target.ref", getBuildBranch())
                 }
             }
         }
@@ -260,11 +197,11 @@ pipeline {
         unsuccessful {
             sendNotification()
         }
-        cleanup {
+        /* cleanup {
             script {
                 util.cleanNode('docker')
             }
-        }
+        } */
     }
 }
 
@@ -331,7 +268,7 @@ boolean shouldStageArtifacts() {
 }
 
 boolean shouldDeployToRepository() {
-    return env.MAVEN_DEPLOY_REPOSITORY && env.MAVEN_REPO_CREDS_ID && getGitAuthor() == 'kiegroup'
+    return env.MAVEN_DEPLOY_REPOSITORY && env.MAVEN_REPO_CREDS_ID && getGitAuthor() == 'mbiarnes'
 }
 
 boolean isRelease() {
@@ -340,10 +277,6 @@ boolean isRelease() {
 
 boolean isCreatePr() {
     return params.CREATE_PR
-}
-
-boolean isUpdateNightlyBranch() {
-    return params.UPDATE_NIGHTLY_BRANCH
 }
 
 String getRepoName() {
@@ -380,21 +313,23 @@ String getGitAuthorCredsID() {
 }
 
 String getBotAuthorCredsID() {
-    return env.BOT_CREDENTIALS_ID
+    return env.GIT_BOT_CREDENTIALS_ID
 }
 
 void setDeployPropertyIfNeeded(String key, def value) {
-    if (value) {
+    if (value != null && value != '') {
         deployProperties[key] = value
     }
 }
 
 MavenCommand getMavenCommand(String directory = '') {
-    directory = directory ?: getRepoName()
-    return new MavenCommand(this, ['-fae', '-ntp'])
-            .withSettingsXmlId(env.MAVEN_SETTINGS_CONFIG_FILE_ID)
-            .inDirectory(directory)
-            .withProperty('full')
+    MavenCommand mvnCmd = new MavenCommand(this, ['-fae', '-ntp'])
+                                .withSettingsXmlId(env.MAVEN_SETTINGS_CONFIG_FILE_ID)
+                                .withProperty('full')
+    if (env.MAVEN_DEPENDENCIES_REPOSITORY) {
+        mvnCmd.withDependencyRepositoryInSettings('deps-repo', env.MAVEN_DEPENDENCIES_REPOSITORY)
+    }
+    return mvnCmd
 }
 
 void runMavenDeploy(boolean localDeployment = false) {
@@ -429,12 +364,4 @@ String getLocalDeploymentFolder() {
 
 String getMavenRepoZipUrl() {
     return "${env.MAVEN_DEPLOY_REPOSITORY.replaceAll('/content/', '/service/local/').replaceFirst('/*$', '')}/content-compressed"
-}
-
-boolean isPersistenceDisabled() {
-    return env.DISABLE_PERSISTENCE ? env.DISABLE_PERSISTENCE.toBoolean() : false
-}
-
-boolean isEventsDisabled() {
-    return env.DISABLE_EVENTS ? env.DISABLE_EVENTS.toBoolean() : false
 }
